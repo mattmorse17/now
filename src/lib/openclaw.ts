@@ -166,3 +166,32 @@ export async function generatePersonalizedNotification(agentId: string, params: 
   const data = await res.json()
   return data.text || data.content || data.message || ''
 }
+
+export async function getFeedItems(params: {
+  userId: string
+  orgId: string
+  agentId: string
+  userGoals?: string[]
+  recentContext?: string
+}): Promise<{
+  id: string
+  type: 'org_announcement' | 'session_recap' | 'weekly_followup' | 'connection_suggestion'
+  personalizedHeadline: string
+  body: string
+  sourceLabel: string
+  ctaText?: string
+  ctaAction?: string
+  relevanceScore: number
+}[]> {
+  try {
+    const res = await fetch(`${API_URL}/api/agents/${params.agentId}/feed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) return []
+    return res.json()
+  } catch {
+    return []
+  }
+}

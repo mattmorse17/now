@@ -22,6 +22,7 @@ import { AdminSettings } from '@/pages/admin/dashboard/AdminSettings'
 import { MemberOnboarding } from '@/pages/member/onboarding/MemberOnboarding'
 import { MemberShell } from '@/components/layout/AppShell'
 import { MemberHome } from '@/pages/member/home/MemberHome'
+import { MemberFeed } from '@/pages/member/home/MemberFeed'
 import { AgentChat } from '@/pages/member/home/AgentChat'
 import { MemberNotifications } from '@/pages/member/home/MemberNotifications'
 import { MemberProfile } from '@/pages/member/home/MemberProfile'
@@ -29,6 +30,7 @@ import { MemberProfile } from '@/pages/member/home/MemberProfile'
 // Shared
 import { LiveSession } from '@/pages/member/session/LiveSession'
 import { JoinPage } from '@/pages/shared/JoinPage'
+import { InvestPage } from '@/pages/invest/InvestPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, initialized } = useAuthStore()
@@ -117,6 +119,7 @@ export default function App() {
           <RequireAuth><RequireOrg><MemberShell /></RequireOrg></RequireAuth>
         }>
           <Route index element={<MemberHome />} />
+          <Route path="feed" element={<MemberFeed />} />
           <Route path="chat" element={<AgentChat />} />
           <Route path="notifications" element={<MemberNotifications />} />
           <Route path="profile" element={<MemberProfile />} />
@@ -126,6 +129,9 @@ export default function App() {
         <Route path="/home/session/:sessionId" element={
           <RequireAuth><RequireOrg><LiveSession /></RequireOrg></RequireAuth>
         } />
+
+        {/* Investor page — public */}
+        <Route path="/invest" element={<InvestPage />} />
 
         {/* Default redirect */}
         <Route path="/" element={<DefaultRedirect />} />

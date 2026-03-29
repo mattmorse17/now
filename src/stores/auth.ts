@@ -29,7 +29,7 @@ async function loadUserData(userId: string) {
   const orgs = (memberships || []) as (OrgMember & { orgs: Org })[]
   const lastOrgId = localStorage.getItem('now_current_org')
   const currentMembership = orgs.find(m => m.org_id === lastOrgId) || orgs[0] || null
-  return { user, orgs, currentMembership }
+  return { user: user as User | null, orgs, currentMembership }
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -42,33 +42,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initialized: false,
 
   init: async () => {
-    // Set up auth state listener first
+    // Listen for future auth changes (sign out, token refresh)
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
         set({ user: null, session: null, orgs: [], currentOrg: null, currentMembership: null })
-      } else if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
-        try {
-          const { user, orgs, currentMembership } = await loadUserData(session.user.id)
-          set({
-            user,
-            session: { access_token: session.access_token },
-            orgs,
-            currentOrg: currentMembership?.orgs || null,
-            currentMembership,
-            initialized: true,
-          })
-        } catch {
-          set({ initialized: true })
-        }
+      } else if (event === 'TOKEN_REFRESHED' && session) {
+        set({ session: { access_token: session.access_token } })
       }
     })
 
-    // Also check existing session on startup
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) {
+    // Load current session immediately — this is the source of truth on startup
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        set({ initialized: true })
+        return
+      }
+      const { user, orgs, currentMembership } = await loadUserData(session.user.id)
+      set({
+        user,
+        session: { access_token: session.access_token },
+        orgs,
+        currentOrg: currentMembership?.orgs || null,
+        currentMembership,
+        initialized: true,
+      })
+    } catch {
       set({ initialized: true })
     }
-    // If session exists, onAuthStateChange INITIAL_SESSION will fire and handle it
   },
 
   signUp: async (email, password, fullName) => {
@@ -84,12 +85,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signIn: async (email, password) => {
     set({ loading: true })
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-    set({ loading: false })
-    if (error) throw error
-
-    // Load user data directly from the sign-in response (don't rely on listener timing)
     try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) throw error
       const { user, orgs, currentMembership } = await loadUserData(data.user.id)
       set({
         user,
@@ -97,9 +95,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         orgs,
         currentOrg: currentMembership?.orgs || null,
         currentMembership,
+        loading: false,
       })
     } catch (e) {
-      console.error('Failed to load user data after sign in:', e)
+      set({ loading: false })
+      throw e
     }
   },
 
@@ -135,7 +135,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .select()
       .single()
     if (error) throw error
-    set({ user: data })
+    set({ user: data as User })
   },
 
   refreshOrgs: async () => {

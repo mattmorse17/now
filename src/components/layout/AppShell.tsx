@@ -1,7 +1,7 @@
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
 import { Avatar } from '@/components/ui'
-import { Home, MessageSquare, Bell, User, Settings, Users, BarChart3, Zap, Radio } from 'lucide-react'
+import { Home, MessageSquare, Bell, User, Settings, Users, BarChart3, Zap, Radio, Sparkles } from 'lucide-react'
 
 export function AdminShell() {
   const { currentOrg, user } = useAuthStore()
@@ -69,6 +69,7 @@ export function MemberShell() {
 
   const navItems = [
     { to: '/home', icon: Home, label: 'Home', end: true },
+    { to: '/home/feed', icon: Sparkles, label: 'Feed' },
     { to: '/home/chat', icon: MessageSquare, label: 'Agent' },
     { to: '/home/notifications', icon: Bell, label: 'Updates' },
     { to: '/home/profile', icon: User, label: 'Profile' },
