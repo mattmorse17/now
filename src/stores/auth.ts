@@ -21,6 +21,17 @@ interface AuthState {
   refreshOrgs: () => Promise<void>
 }
 
+async function loadUserData(userId: string) {
+  const [{ data: user }, { data: memberships }] = await Promise.all([
+    supabase.from('users').select('*').eq('id', userId).single(),
+    supabase.from('org_members').select('*, orgs(*)').eq('user_id', userId),
+  ])
+  const orgs = (memberships || []) as (OrgMember & { orgs: Org })[]
+  const lastOrgId = localStorage.getItem('now_current_org')
+  const currentMembership = orgs.find(m => m.org_id === lastOrgId) || orgs[0] || null
+  return { user, orgs, currentMembership }
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
@@ -31,55 +42,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initialized: false,
 
   init: async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        set({ initialized: true })
-        return
-      }
-
-      const { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', session.user.id)
-        .single()
-
-      const { data: memberships } = await supabase
-        .from('org_members')
-        .select('*, orgs(*)')
-        .eq('user_id', session.user.id)
-
-      const orgs = (memberships || []) as (OrgMember & { orgs: Org })[]
-
-      // Restore last org from localStorage
-      const lastOrgId = localStorage.getItem('now_current_org')
-      const currentMembership = orgs.find(m => m.org_id === lastOrgId) || orgs[0] || null
-
-      set({
-        user,
-        session: { access_token: session.access_token },
-        orgs,
-        currentOrg: currentMembership?.orgs || null,
-        currentMembership,
-        initialized: true,
-      })
-
-      // Listen for auth changes
-      supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_OUT') {
-          set({ user: null, session: null, orgs: [], currentOrg: null, currentMembership: null })
-        } else if (session) {
-          const { data: user } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .single()
-          set({ user, session: { access_token: session.access_token } })
+    // Set up auth state listener first
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        set({ user: null, session: null, orgs: [], currentOrg: null, currentMembership: null })
+      } else if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
+        try {
+          const { user, orgs, currentMembership } = await loadUserData(session.user.id)
+          set({
+            user,
+            session: { access_token: session.access_token },
+            orgs,
+            currentOrg: currentMembership?.orgs || null,
+            currentMembership,
+            initialized: true,
+          })
+        } catch {
+          set({ initialized: true })
         }
-      })
-    } catch {
+      }
+    })
+
+    // Also check existing session on startup
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
       set({ initialized: true })
     }
+    // If session exists, onAuthStateChange INITIAL_SESSION will fire and handle it
   },
 
   signUp: async (email, password, fullName) => {
@@ -95,10 +84,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signIn: async (email, password) => {
     set({ loading: true })
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     set({ loading: false })
     if (error) throw error
-    await get().init()
+
+    // Load user data directly from the sign-in response (don't rely on listener timing)
+    try {
+      const { user, orgs, currentMembership } = await loadUserData(data.user.id)
+      set({
+        user,
+        session: { access_token: data.session.access_token },
+        orgs,
+        currentOrg: currentMembership?.orgs || null,
+        currentMembership,
+      })
+    } catch (e) {
+      console.error('Failed to load user data after sign in:', e)
+    }
   },
 
   signInWithGoogle: async () => {
