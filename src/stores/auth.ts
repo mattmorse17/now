@@ -21,15 +21,39 @@ interface AuthState {
   refreshOrgs: () => Promise<void>
 }
 
-async function loadUserData(userId: string) {
-  const [{ data: user }, { data: memberships }] = await Promise.all([
-    supabase.from('users').select('*').eq('id', userId).single(),
-    supabase.from('org_members').select('*, orgs(*)').eq('user_id', userId),
-  ])
-  const orgs = (memberships || []) as (OrgMember & { orgs: Org })[]
-  const lastOrgId = localStorage.getItem('now_current_org')
-  const currentMembership = orgs.find(m => m.org_id === lastOrgId) || orgs[0] || null
-  return { user: user as User | null, orgs, currentMembership }
+// Build a minimal User object from Supabase auth response (no DB fetch needed)
+function userFromAuth(authUser: { id: string; email?: string; user_metadata?: Record<string, any> }): User {
+  return {
+    id: authUser.id,
+    email: authUser.email || '',
+    full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || '',
+    avatar_url: authUser.user_metadata?.avatar_url || null,
+    global_profile: { bio: '', goals: [], preferences: {} },
+    social_links: { instagram: '', twitter: '', youtube: '', website: '', tiktok: '', linkedin: '' },
+    fcm_token: null,
+    onboarding_completed: false,
+    created_at: new Date().toISOString(),
+  } as User
+}
+
+// Try to load full profile from DB — returns null user if it fails (RLS, network, etc)
+async function tryLoadUserProfile(userId: string): Promise<User | null> {
+  try {
+    const { data, error } = await supabase.from('users').select('*').eq('id', userId).single()
+    if (error || !data) return null
+    return data as User
+  } catch {
+    return null
+  }
+}
+
+async function loadOrgs(userId: string) {
+  try {
+    const { data } = await supabase.from('org_members').select('*, orgs(*)').eq('user_id', userId)
+    return (data || []) as (OrgMember & { orgs: Org })[]
+  } catch {
+    return []
+  }
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -42,7 +66,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initialized: false,
 
   init: async () => {
-    // Listen for future auth changes (sign out, token refresh)
+    // Listen for future auth changes
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
         set({ user: null, session: null, orgs: [], currentOrg: null, currentMembership: null })
@@ -51,14 +75,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     })
 
-    // Load current session immediately — this is the source of truth on startup
+    // Load current session
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
         set({ initialized: true })
         return
       }
-      const { user, orgs, currentMembership } = await loadUserData(session.user.id)
+
+      // Always set a user immediately from auth — never depend on DB fetch for login
+      const authUser = userFromAuth(session.user)
+      const dbUser = await tryLoadUserProfile(session.user.id)
+      const user = dbUser || authUser
+
+      const orgs = await loadOrgs(session.user.id)
+      const lastOrgId = localStorage.getItem('now_current_org')
+      const currentMembership = orgs.find(m => m.org_id === lastOrgId) || orgs[0] || null
+
       set({
         user,
         session: { access_token: session.access_token },
@@ -68,6 +101,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         initialized: true,
       })
     } catch {
+      // Even if everything fails, mark initialized so the app doesn't hang
       set({ initialized: true })
     }
   },
@@ -85,22 +119,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signIn: async (email, password) => {
     set({ loading: true })
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) throw error
-      const { user, orgs, currentMembership } = await loadUserData(data.user.id)
-      set({
-        user,
-        session: { access_token: data.session.access_token },
-        orgs,
-        currentOrg: currentMembership?.orgs || null,
-        currentMembership,
-        loading: false,
-      })
-    } catch (e) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) {
       set({ loading: false })
-      throw e
+      throw error
     }
+
+    // ALWAYS set user from auth response immediately — this makes login work
+    // regardless of whether the DB profile fetch succeeds
+    const authUser = userFromAuth(data.user)
+    set({
+      user: authUser,
+      session: { access_token: data.session.access_token },
+      loading: false,
+    })
+
+    // Then try to enrich with full DB profile + orgs in the background
+    const dbUser = await tryLoadUserProfile(data.user.id)
+    if (dbUser) set({ user: dbUser })
+
+    const orgs = await loadOrgs(data.user.id)
+    const lastOrgId = localStorage.getItem('now_current_org')
+    const currentMembership = orgs.find(m => m.org_id === lastOrgId) || orgs[0] || null
+    set({
+      orgs,
+      currentOrg: currentMembership?.orgs || null,
+      currentMembership,
+    })
   },
 
   signInWithGoogle: async () => {
